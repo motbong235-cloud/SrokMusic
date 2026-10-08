@@ -776,7 +776,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             _MEDIA_CACHE.pop(next(iter(_MEDIA_CACHE)))
         await msg.reply_text(
             "📥 អ្នកចង់ទាញយកពី Link នេះជា Video ឬ MP3?\n"
-            "គាំទ្រគេហទំព័រជាច្រើនតាម yt-dlp ប៉ុន្តែមិនមែនគ្រប់ Link ទាំងអស់ទេ។ សូមប្រើតែមាតិកាដែលអ្នកជាម្ចាស់ ឬមានការអនុញ្ញាត។\n"
             "សូមជ្រើសរើសមួយខាងក្រោម៖",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🎬 Video (MP4)", callback_data=f"media:video:{token}")],
