@@ -215,6 +215,55 @@ def youtube_url(title: str, artist: str = "") -> str:
     )
 
 
+def youtube_search(term: str, limit: int = 5) -> list[dict[str, str]]:
+    """ស្វែងរកលទ្ធផល YouTube តាម yt-dlp (មិនទាញយកឯកសារនៅជំហាននេះទេ)។"""
+    try:
+        import yt_dlp
+    except ImportError:
+        log.warning("yt-dlp is not installed; returning YouTube search URL only")
+        return []
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "extract_flat": True,
+        "playlistend": limit,
+        "default_search": f"ytsearch{limit}",
+        "noplaylist": True,
+    }
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(f"ytsearch{limit}:{term}", download=False)
+        rows = []
+        for entry in (info or {}).get("entries") or []:
+            if not entry:
+                continue
+            video_id = entry.get("id") or ""
+            url = entry.get("url") or (f"https://www.youtube.com/watch?v={video_id}" if video_id else "")
+            if url and not url.startswith("http"):
+                url = f"https://www.youtube.com/watch?v={url}"
+            if url:
+                rows.append({
+                    "title": str(entry.get("title") or "YouTube video")[:150],
+                    "uploader": str(entry.get("uploader") or entry.get("channel") or "YouTube")[:80],
+                    "url": url,
+                })
+        return rows[:limit]
+    except Exception:
+        log.exception("YouTube search failed")
+        return []
+
+
+def youtube_results_keyboard(results: list[dict[str, str]], fallback_query: str) -> InlineKeyboardMarkup:
+    rows = []
+    for i, item in enumerate(results, 1):
+        label = f"▶️ {i}. {item['title']}"
+        rows.append([InlineKeyboardButton(label[:60], url=item["url"])])
+    if not rows:
+        rows.append([InlineKeyboardButton("🔎 ស្វែងរកលើ YouTube", url=youtube_url(fallback_query))])
+    return InlineKeyboardMarkup(rows)
+
+
 def format_ms(ms: int | None) -> str:
     if not ms:
         return "—"
@@ -361,16 +410,15 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     text = (
         "🎵 <b>សូមស្វាគមន៍មកកាន់ SrokMusic</b>\n\n"
-        "ស្វែងរក និងស្តាប់ចម្រៀងដែលអ្នកចូលចិត្ត យ៉ាងងាយស្រួល។\n\n"
+        "ស្វែងរកចម្រៀងដោយផ្ទាល់ក្នុង YouTube។\n\n"
         "<b>របៀបប្រើ</b>\n"
         "1️⃣ វាយ <b>ឈ្មោះបទ</b> ឬ <b>ឈ្មោះសិល្បករ</b>\n"
-        "2️⃣ ចុច <b>លេខបទ</b> ដែលអ្នកចង់បាន\n"
-        "3️⃣ Bot នឹងផ្ញើបទនោះជូនអ្នកភ្លាមៗ 🎧\n\n"
+        "2️⃣ Bot ស្វែងរកលទ្ធផល YouTube ហើយបង្ហាញតំណច្រើនឲ្យជ្រើស\n"
+        "3️⃣ ចុចលើបទដែលចង់ស្តាប់ ដើម្បីបើក YouTube 🎧\n\n"
         "<b>ឧទាហរណ៍</b>\n"
         "• <code>Shape of You</code>\n"
         "• <code>Perfect Ed Sheeran</code>\n\n"
-        "🆓 បទពេញអាចទាញបានពី Jamendo នៅពេល API ផ្តល់ Download URL និងអាជ្ញាបណ្ណ\n"
-        "🍎 iTunes ផ្តល់ Preview · ▶️ YouTube/Apple Music សម្រាប់ស្តាប់បទពេញតាមផ្លូវការ\n\n"
+        "ℹ️ Bot ស្វែងរក YouTube និងផ្ដល់តំណ។ ទាញយកឯកសារបានតែចំពោះមាតិកាដែលអ្នកមានសិទ្ធិ ឬមានការអនុញ្ញាត។\n\n"
         "/help — ជំនួយ"
     )
     if user and is_admin(user.id):
@@ -381,11 +429,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
         "<b>របៀបប្រើ SrokMusic</b>\n"
-        "1. វាយឈ្មោះបទ\n"
-        "2. ជ្រើសលទ្ធផល\n"
-        "3. បទពេញអាចផ្ញើជា MP3 ពី Jamendo បើមាន Download URL និងអាជ្ញាបណ្ណ\n"
-        "   iTunes ផ្តល់តែ Preview; YouTube ជាតំណស្តាប់ផ្លូវការ\n"
-        "4. ប្រើប៊ូតុង YouTube/Apple Music ដើម្បីស្តាប់តាមផ្លូវការ\n\n"
+        "1. វាយឈ្មោះបទ ឬសិល្បករ\n"
+        "2. Bot ស្វែងរកលទ្ធផល YouTube ចំនួន 5\n"
+        "3. ចុចប៊ូតុងលទ្ធផល ដើម្បីបើកបទនៅ YouTube\n"
+        "4. Bot មិនទាញយកមាតិកាដែលមានសិទ្ធិដោយគ្មានការអនុញ្ញាតទេ\n\n"
         "/start — ម៉ឺនុយ",
         parse_mode="HTML",
     )
@@ -561,55 +608,34 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await msg.reply_text("សូមសរសេរខ្លីជាងនេះ (អតិបរមា 120 តួ)។")
         return
 
-    status = await msg.reply_text(f"🔎 កំពុងស្វែងរក៖ <b>{query}</b> …", parse_mode="HTML")
+    status = await msg.reply_text(f"🔎 កំពុងស្វែងរកក្នុង YouTube៖ <b>{query}</b> …", parse_mode="HTML")
     try:
-        try:
-            jamendo_results = jamendo_search(query, limit=25)
-        except Exception:
-            log.exception("jamendo")
-            jamendo_results = []
-        try:
-            itunes_results = itunes_search(query, limit=20)
-        except Exception:
-            log.exception("itunes")
-            itunes_results = []
-
-        # Show legal full-download matches first, then other Jamendo results,
-        # then iTunes previews. Keep the Telegram result list manageable.
-        jamendo_results.sort(key=lambda t: bool(t.get("fullUrl")), reverse=True)
-        combined = jamendo_results + itunes_results
-        seen = set()
-        results = []
-        for track in combined:
-            key = (
-                (track.get("trackName") or "").strip().casefold(),
-                (track.get("artistName") or "").strip().casefold(),
-            )
-            if key in seen:
-                continue
-            seen.add(key)
-            results.append(track)
-        results = results[:20]
-    except Exception as e:
-        log.exception("search")
-        await status.edit_text(f"❌ ស្វែងរកមិនបាន។ សាកម្តងទៀត។")
-        return
+        yt_results = youtube_search(query, limit=5)
+    except Exception:
+        log.exception("youtube search")
+        yt_results = []
 
     track_search(user.id, query)
-
-    if not results:
+    if yt_results:
+        lines = [f"🎵 <b>លទ្ធផល YouTube សម្រាប់៖</b> {query}\n"]
+        for i, item in enumerate(yt_results, 1):
+            title = item["title"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            uploader = item["uploader"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            lines.append(f"{i}. {title}\n   👤 {uploader}")
+        lines.append("\n👇 ចុចប៊ូតុងដើម្បីបើកបទនៅ YouTube។")
+        lines.append("\nℹ️ Bot អាចស្វែងរក និងផ្ដល់តំណបាន។ ការទាញយកជាឯកសារអូឌីយ៉ូ ត្រូវប្រើតែបទដែលអ្នកមានសិទ្ធិ ឬអ្នកបង្កើតអនុញ្ញាតឱ្យទាញយក។")
         await status.edit_text(
-            f"😕 មិនឃើញបទ៖ <b>{query}</b>\nសាកបន្ថែមឈ្មោះសិល្បករ។",
+            "\n".join(lines),
             parse_mode="HTML",
+            reply_markup=youtube_results_keyboard(yt_results, query),
+            disable_web_page_preview=True,
         )
-        return
-
-    remember_tracks(results)
-    await status.edit_text(
-        build_list_text(results, query),
-        parse_mode="HTML",
-        reply_markup=build_pick_keyboard(results),
-    )
+    else:
+        await status.edit_text(
+            f"😕 Bot មិនអាចទាញលទ្ធផល YouTube ឥឡូវនេះទេ។\nចុចខាងក្រោមដើម្បីស្វែងរក៖ <b>{query}</b>",
+            parse_mode="HTML",
+            reply_markup=youtube_results_keyboard([], query),
+        )
 
 
 async def send_track(message, track: dict) -> None:
