@@ -45,6 +45,7 @@ _lock = threading.RLock()
 ITUNES_URL = "https://itunes.apple.com/search"
 UA = "SrokMusic/2.0"
 _PREVIEW_CACHE: dict[str, dict[str, str]] = {}
+_TRACK_CACHE: dict[str, dict] = {}
 
 # pending broadcast: admin_id -> True
 _broadcast_wait: set[int] = set()
@@ -199,6 +200,47 @@ def build_keyboard(track: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def track_key(track: dict) -> str:
+    return str(track.get("trackId") or abs(hash(track.get("trackName") or "")) % 10**10)
+
+
+def remember_tracks(results: list[dict]) -> None:
+    for t in results:
+        _TRACK_CACHE[track_key(t)] = t
+    if len(_TRACK_CACHE) > 400:
+        for k in list(_TRACK_CACHE.keys())[:100]:
+            _TRACK_CACHE.pop(k, None)
+
+
+def build_list_text(results: list[dict], query: str) -> str:
+    lines = [f"✅ រកឃើញ <b>{len(results)}</b> បទ · <i>{query}</i>\n"]
+    for i, t in enumerate(results, 1):
+        lines.append(
+            f"<b>{i}.</b> {t.get('trackName') or '—'} — {t.get('artistName') or '—'} "
+            f"· ⏱ {format_ms(t.get('trackTimeMillis'))}"
+        )
+    lines.append("\n👇 ចុចលេខបទដែលចង់បាន")
+    return "\n".join(lines)
+
+
+def build_pick_keyboard(results: list[dict]) -> InlineKeyboardMarkup:
+    btns = [
+        InlineKeyboardButton(f"{i}", callback_data=f"pk:{track_key(t)}")
+        for i, t in enumerate(results, 1)
+    ]
+    rows = [btns[i:i + 3] for i in range(0, len(btns), 3)]
+    return InlineKeyboardMarkup(rows)
+
+
+def link_keyboard(track: dict) -> InlineKeyboardMarkup:
+    row = []
+    if track.get("trackViewUrl"):
+        row.append(InlineKeyboardButton("🍎 Apple Music (បទពេញ)", url=track["trackViewUrl"]))
+    row.append(InlineKeyboardButton("▶️ YouTube", url=youtube_url(
+        track.get("trackName") or "", track.get("artistName") or "")))
+    return InlineKeyboardMarkup([row])
+
+
 def admin_keyboard() -> InlineKeyboardMarkup:
     d = db_read()
     maint = "🟢 បើក Bot" if d.get("maintenance") else "🔴 Maintenance"
@@ -242,13 +284,16 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text("⛔ គណនីនេះត្រូវបានបិទ។")
         return
     text = (
-        "🎵 <b>SrokMusic</b> — ស្វែងរកចម្រៀង\n\n"
-        "ផ្ញើ <b>ចំណងជើងបទ</b> ឬ ឈ្មោះសិល្បករ។\n\n"
+        "🎵 <b>សូមស្វាគមន៍មកកាន់ SrokMusic</b>\n\n"
+        "ស្វែងរក និងស្តាប់ចម្រៀងដែលអ្នកចូលចិត្ត យ៉ាងងាយស្រួល។\n\n"
+        "<b>របៀបប្រើ</b>\n"
+        "1️⃣ វាយ <b>ឈ្មោះបទ</b> ឬ <b>ឈ្មោះសិល្បករ</b>\n"
+        "2️⃣ ចុច <b>លេខបទ</b> ដែលអ្នកចង់បាន\n"
+        "3️⃣ Bot នឹងផ្ញើបទនោះជូនអ្នកភ្លាមៗ 🎧\n\n"
         "<b>ឧទាហរណ៍</b>\n"
         "• <code>Shape of You</code>\n"
         "• <code>Perfect Ed Sheeran</code>\n\n"
-        "• ទាញ Preview 30s · YouTube · Apple Music\n"
-        "⚠️ មិនផ្តល់ចម្រៀងពេញខុសច្បាប់\n\n"
+        "🍎 ស្តាប់បទពេញតាម Apple Music · ▶️ YouTube\n\n"
         "/help — ជំនួយ"
     )
     if user and is_admin(user.id):
@@ -454,22 +499,77 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
+    remember_tracks(results)
     await status.edit_text(
-        f"✅ រកឃើញ <b>{len(results)}</b> បទ · <i>{query}</i>",
+        build_list_text(results, query),
         parse_mode="HTML",
+        reply_markup=build_pick_keyboard(results),
     )
-    for i, track in enumerate(results, 1):
-        art = track.get("artworkUrl100") or ""
-        caption = build_caption(track, i)
-        kb = build_keyboard(track)
+
+
+async def send_track(message, track: dict) -> None:
+    """ផ្ញើបទដែលបានជ្រើស (cover + audio preview)។"""
+    title = re.sub(r'[\\/:*?"<>|]', "", track.get("trackName") or "preview")[:80]
+    artist = track.get("artistName") or ""
+    preview = track.get("previewUrl") or ""
+    caption = build_caption(track, 1).replace("<b>1. ", "<b>")
+    kb = link_keyboard(track)
+
+    if not preview:
+        await message.reply_text(
+            caption + "\n\n⚠️ បទនេះគ្មាន preview។ សូមប្រើ Apple Music / YouTube។",
+            parse_mode="HTML", reply_markup=kb,
+        )
+        return
+
+    req = urllib.request.Request(preview, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        data = resp.read()
+    if len(data) < 1000:
+        await message.reply_text("❌ ឯកសារមិនត្រឹមត្រូវ។")
+        return
+    with tempfile.NamedTemporaryFile(suffix=".m4a", delete=False) as tmp:
+        tmp.write(data)
+        path = tmp.name
+    try:
+        with open(path, "rb") as f:
+            await message.reply_audio(
+                audio=f,
+                filename=f"{title}.m4a",
+                title=title,
+                performer=artist,
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=kb,
+            )
+        d = db_read()
+        d["previews"] = int(d.get("previews") or 0) + 1
+        db_write(d)
+    finally:
         try:
-            if art:
-                art_hi = re.sub(r"\d+x\d+bb", "300x300bb", art)
-                await msg.reply_photo(photo=art_hi, caption=caption, parse_mode="HTML", reply_markup=kb)
-            else:
-                await msg.reply_text(caption, parse_mode="HTML", reply_markup=kb)
-        except Exception:
-            await msg.reply_text(caption, parse_mode="HTML", reply_markup=kb)
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    if not q or not q.data or not q.data.startswith("pk:"):
+        return
+    user = update.effective_user
+    if user and is_blocked(user.id):
+        await q.answer("Blocked", show_alert=True)
+        return
+    track = _TRACK_CACHE.get(q.data[3:])
+    if not track:
+        await q.answer("ផុតកំណត់ — ស្វែងម្តងទៀត", show_alert=True)
+        return
+    await q.answer("កំពុងផ្ញើបទ…")
+    try:
+        await send_track(q.message, track)
+    except Exception as e:
+        log.exception("pick")
+        await q.message.reply_text(f"❌ ផ្ញើមិនបាន៖ {e}")
 
 
 async def on_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -537,6 +637,7 @@ def main() -> None:
     app.add_handler(CommandHandler("block", cmd_block))
     app.add_handler(CommandHandler("unblock", cmd_unblock))
     app.add_handler(CallbackQueryHandler(on_admin_cb, pattern=r"^adm:"))
+    app.add_handler(CallbackQueryHandler(on_pick, pattern=r"^pk:"))
     app.add_handler(CallbackQueryHandler(on_download, pattern=r"^dl:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     log.info("SrokMusic started · admins=%s", ADMIN_IDS)
