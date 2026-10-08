@@ -48,6 +48,7 @@ ITUNES_URL = "https://itunes.apple.com/search"
 UA = "SrokMusic/2.0"
 _PREVIEW_CACHE: dict[str, dict[str, str]] = {}
 _TRACK_CACHE: dict[str, dict] = {}
+_MEDIA_CACHE: dict[str, str] = {}
 
 # pending broadcast: admin_id -> True
 _broadcast_wait: set[int] = set()
@@ -408,31 +409,64 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if user and is_blocked(user.id):
         await update.effective_message.reply_text("⛔ គណនីនេះត្រូវបានបិទ។")
         return
+
     text = (
-        "🎵 <b>សូមស្វាគមន៍មកកាន់ SrokMusic</b>\n\n"
-        "ស្វែងរកចម្រៀងដោយផ្ទាល់ក្នុង YouTube។\n\n"
-        "<b>របៀបប្រើ</b>\n"
-        "1️⃣ វាយ <b>ឈ្មោះបទ</b> ឬ <b>ឈ្មោះសិល្បករ</b>\n"
-        "2️⃣ Bot ស្វែងរកលទ្ធផល YouTube ហើយបង្ហាញតំណច្រើនឲ្យជ្រើស\n"
-        "3️⃣ ចុចលើបទដែលចង់ស្តាប់ ដើម្បីបើក YouTube 🎧\n\n"
-        "<b>ឧទាហរណ៍</b>\n"
-        "• <code>Shape of You</code>\n"
-        "• <code>Perfect Ed Sheeran</code>\n\n"
-        "ℹ️ Bot ស្វែងរក YouTube និងផ្ដល់តំណ។ ទាញយកឯកសារបានតែចំពោះមាតិកាដែលអ្នកមានសិទ្ធិ ឬមានការអនុញ្ញាត។\n\n"
-        "/help — ជំនួយ"
+        "🎧 <b>SrokMusic</b> — ស្វែងរក និងស្តាប់តន្ត្រី\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "👋 សូមស្វាគមន៍! ជ្រើសរើសមុខងារខាងក្រោម ឬវាយឈ្មោះបទដើម្បីចាប់ផ្តើម។\n\n"
+        "🔎 <b>ស្វែងរកបទចម្រៀង</b>\n"
+        "• វាយឈ្មោះបទ ឬឈ្មោះសិល្បករ\n"
+        "• Bot បង្ហាញលទ្ធផល YouTube និងតំណស្តាប់\n"
+        "• បើមានលទ្ធផល iTunes/Jamendo ក៏អាចបង្ហាញជូនផងដែរ\n\n"
+        "📥 <b>Link ពីគេហទំព័រផ្សេងៗ</b>\n"
+        "• ផ្ញើ Link ដែលគាំទ្រ មកកាន់ Bot\n"
+        "• Telegram៖ Forward ឬផ្ញើឯកសារមក Bot ដើម្បី Save/Download ម្ដងទៀត\n"
+        "• ជ្រើស 🎬 Video ឬ 🎵 MP3\n"
+        "• ការគាំទ្រអាស្រ័យលើគេហទំព័រ និង Link នីមួយៗ\n\n"
+        "💡 <b>សាកល្បងវាយ៖</b>\n"
+        "<code>Shape of You</code>\n"
+        "<code>Perfect Ed Sheeran</code>\n\n"
+        "⚠️ ទាញយកតែមាតិកាដែលអ្នកជាម្ចាស់ ឬមានការអនុញ្ញាត។\n"
+        "📖 ចុច «ជំនួយ» ប្រសិនបើចង់ដឹងពីរបៀបប្រើ។"
     )
+    rows = [
+        [InlineKeyboardButton("🔎 ស្វែងរកបទចម្រៀង", callback_data="home:search")],
+        [InlineKeyboardButton("📖 របៀបប្រើ / ជំនួយ", callback_data="home:help")],
+        [InlineKeyboardButton("▶️ បើក YouTube", url="https://www.youtube.com/")],
+    ]
     if user and is_admin(user.id):
-        text += "\n\n🔐 Admin: /admin"
-    await update.effective_message.reply_text(text, parse_mode="HTML")
+        rows.append([InlineKeyboardButton("🔐 Admin Panel", callback_data="home:admin")])
+    await update.effective_message.reply_text(
+        text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows)
+    )
+
+
+async def on_home_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    if not q:
+        return
+    await q.answer()
+    action = (q.data or "").split(":", 1)[-1]
+    if action == "search":
+        await q.message.reply_text(
+            "🔎 សូមវាយឈ្មោះបទចម្រៀង ឬឈ្មោះសិល្បករ ដើម្បីស្វែងរក។\n"
+            "ឧទាហរណ៍៖ <code>Shape of You</code>", parse_mode="HTML"
+        )
+    elif action == "help":
+        await cmd_help(update, context)
+    elif action == "admin":
+        await cmd_admin(update, context)
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
-        "<b>របៀបប្រើ SrokMusic</b>\n"
-        "1. វាយឈ្មោះបទ ឬសិល្បករ\n"
-        "2. Bot ស្វែងរកលទ្ធផល YouTube ចំនួន 5\n"
-        "3. ចុចប៊ូតុងលទ្ធផល ដើម្បីបើកបទនៅ YouTube\n"
-        "4. Bot មិនទាញយកមាតិកាដែលមានសិទ្ធិដោយគ្មានការអនុញ្ញាតទេ\n\n"
+        "<b>របៀបប្រើ SrokMusic</b>\n\n"
+        "🔎 <b>ស្វែងរក</b>: វាយឈ្មោះបទ ឬឈ្មោះសិល្បករ។\n"
+        "▶️ ចុចលទ្ធផល ដើម្បីស្តាប់លើ YouTube។\n"
+        "📥 <b>ទាញយក Link</b>: ផ្ញើ Link មក Bot រួចជ្រើស Video ឬ MP3។\n"
+        "🌐 គេហទំព័រដែលគាំទ្រអាស្រ័យលើ yt-dlp និង Link នីមួយៗ។\n"
+        "📨 Telegram៖ Forward media មក Bot; Link t.me មិនអាចទាញដោយ URL តែឯងបានគ្រប់ករណីទេ។\n"
+        "⚠️ ប្រើការទាញយកតែចំពោះមាតិកាដែលអ្នកមានសិទ្ធិ។\n\n"
         "/start — ម៉ឺនុយ",
         parse_mode="HTML",
     )
@@ -565,6 +599,157 @@ async def on_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await q.edit_message_text(text, parse_mode="HTML", reply_markup=admin_keyboard())
 
 
+async def download_authorized_youtube(message, url: str, media_type: str = "audio") -> None:
+    """ទាញយក MP3 ឬ MP4 ពីគេហទំព័រដែល yt-dlp គាំទ្រ សម្រាប់មាតិកាដែលមានសិទ្ធិ។"""
+    try:
+        import yt_dlp
+    except ImportError:
+        await message.reply_text("❌ មិនទាន់ដំឡើង yt-dlp ទេ។ សូមដំឡើង៖ pip install -U yt-dlp")
+        return
+
+    if not re.match(r"^https?://", url.strip(), re.I):
+        await message.reply_text("សូមផ្ញើ Link ពេញដែលចាប់ផ្តើមដោយ https:// ឬ http://។")
+        return
+
+    is_video = media_type == "video"
+    status = await message.reply_text(
+        ("🎬 កំពុងទាញយកវីដេអូ…" if is_video else "🎵 កំពុងទាញយក MP3…")
+        + " សូមប្រើតែវីដេអូដែលអ្នកជាម្ចាស់ ឬមានការអនុញ្ញាតឱ្យទាញយក។"
+    )
+    try:
+        with tempfile.TemporaryDirectory(prefix="srokmusic_") as td:
+            outtmpl = str(Path(td) / "%(title).70s.%(ext)s")
+            opts = {
+                "outtmpl": outtmpl,
+                "noplaylist": True,
+                "quiet": True,
+                "no_warnings": True,
+                "restrictfilenames": True,
+                "max_filesize": 45 * 1024 * 1024,
+            }
+            if is_video:
+                opts.update({
+                    "format": "best[ext=mp4][filesize<45M]/best[filesize<45M]/best",
+                    "merge_output_format": "mp4",
+                })
+            else:
+                opts.update({
+                    "format": "bestaudio/best",
+                    "postprocessors": [{
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": "mp3",
+                        "preferredquality": "192",
+                    }],
+                })
+            import asyncio
+            def fetch():
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    return info, ydl.prepare_filename(info)
+            info, original_path = await asyncio.to_thread(fetch)
+            original = Path(original_path)
+            if is_video:
+                candidates = [original]
+                if original.suffix.lower() != ".mp4":
+                    candidates.insert(0, original.with_suffix(".mp4"))
+                candidates.extend(Path(td).glob("*.mp4"))
+                candidates.extend(p for p in Path(td).glob("*.*") if p.suffix.lower() in {".mkv", ".webm", ".mov"})
+                candidate = next((p for p in candidates if p.exists() and p.stat().st_size > 0), None)
+            else:
+                candidates = [original.with_suffix(".mp3"), *Path(td).glob("*.mp3")]
+                candidate = next((p for p in candidates if p.exists() and p.stat().st_size > 0), None)
+            if candidate is None:
+                raise RuntimeError("មិនអាចរកឯកសារដែលបានទាញយក។ សូមពិនិត្យ FFmpeg និង format របស់វីដេអូ។")
+            if candidate.stat().st_size > 49 * 1024 * 1024:
+                raise RuntimeError("ឯកសារធំពេកសម្រាប់ផ្ញើតាម Telegram Bot (កំណត់ប្រហែល 50 MB)។")
+            title = str(info.get("title") or ("Video" if is_video else "Audio"))[:200]
+            safe_title = re.sub(r'[\\/:*?"<>|]', "", title)[:80] or ("video" if is_video else "audio")
+            artist = str(info.get("artist") or info.get("uploader") or "")[:100]
+            with candidate.open("rb") as media:
+                if is_video:
+                    await message.reply_video(
+                        video=media, filename=f"{safe_title}{candidate.suffix.lower()}",
+                        caption=f"✅ វីដេអូរួចរាល់៖ {title}\nសូមប្រើតែមាតិកាដែលអ្នកមានសិទ្ធិទាញយក។",
+                        supports_streaming=True,
+                    )
+                else:
+                    await message.reply_audio(
+                        audio=media, filename=f"{safe_title}.mp3", title=title,
+                        performer=artist or None,
+                        caption="✅ MP3 រួចរាល់។ សូមប្រើតែមាតិកាដែលអ្នកមានសិទ្ធិទាញយក។",
+                    )
+        await status.delete()
+    except Exception as exc:
+        log.exception("Media download failed")
+        try:
+            await status.edit_text(
+                "❌ ទាញយកមិនបាន។ គេហទំព័រនេះអាចមិនគាំទ្រ, Link អាច private/login-required ឬ Server ខ្វះ FFmpeg។\n"
+                f"ព័ត៌មាន៖ {str(exc)[:400]}"
+            )
+        except Exception:
+            pass
+
+
+async def on_media_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    if not q or not q.data or not q.data.startswith("media:"):
+        return
+    user = update.effective_user
+    if not user or is_blocked(user.id):
+        await q.answer("គណនីនេះត្រូវបានបិទ។", show_alert=True)
+        return
+    parts = q.data.split(":", 2)
+    if len(parts) != 3 or parts[1] not in {"video", "audio"}:
+        await q.answer("ជម្រើសមិនត្រឹមត្រូវ។", show_alert=True)
+        return
+    media_type, token = parts[1], parts[2]
+    url = _MEDIA_CACHE.get(token)
+    if not url:
+        await q.answer("Link ផុតកំណត់។ សូមផ្ញើម្ដងទៀត។", show_alert=True)
+        return
+    await q.answer()
+    await download_authorized_youtube(q.message, url, media_type)
+
+
+async def on_telegram_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """ទទួលឯកសារដែលអ្នកប្រើផ្ញើ/Forward មក Bot តាម Telegram ហើយផ្ញើត្រឡប់ជាឯកសារអាច Save បាន។"""
+    msg = update.effective_message
+    user = update.effective_user
+    if not msg or not user:
+        return
+    track_user(user)
+    if is_blocked(user.id):
+        await msg.reply_text("⛔ គណនីនេះត្រូវបានបិទ។")
+        return
+
+    # Telegram Bot API cannot fetch arbitrary t.me post links by URL alone.
+    # For Telegram media, users can send or forward the media itself to this bot.
+    media_kind = "ឯកសារ Telegram"
+    if msg.video or msg.video_note or msg.animation:
+        media_kind = "វីដេអូ Telegram"
+    elif msg.audio or msg.voice:
+        media_kind = "សំឡេង Telegram"
+    elif msg.photo:
+        media_kind = "រូបភាព Telegram"
+    elif msg.document:
+        media_kind = "ឯកសារ Telegram"
+
+    try:
+        await msg.reply_text(
+            f"✅ បានទទួល {media_kind}! ខាងក្រោមនេះជាច្បាប់ចម្លងដែលអាច Save/Download បាន។\n"
+            "ចំណាំ៖ បើអ្នកមានតែ Link t.me សូម Forward post ឬផ្ញើឯកសារពី Channel មក Bot។ "
+            "សម្រាប់ Channel ឯកជន Bot ត្រូវមានសិទ្ធិចូលមើល។"
+        )
+        await context.bot.copy_message(
+            chat_id=msg.chat_id,
+            from_chat_id=msg.chat_id,
+            message_id=msg.message_id,
+        )
+    except Exception as exc:
+        log.exception("Telegram media copy failed")
+        await msg.reply_text("❌ មិនអាចចម្លងឯកសារនេះបានទេ។ សូមសាកផ្ញើជា Document ឬ Forward ម្ដងទៀត។")
+
+
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
     user = update.effective_user
@@ -575,6 +760,30 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     track_user(user)
+
+    # Accept direct links from sites supported by yt-dlp (availability depends on each site).
+    if re.match(r"^https?://", query, re.I) and re.search(r"\.[a-z]{2,}(?:[:/]|$)", query.split("/", 3)[2] if len(query.split("/", 3)) > 2 else "", re.I):
+        if is_blocked(user.id):
+            await msg.reply_text("⛔ គណនីនេះត្រូវបានបិទ។")
+            return
+        d = db_read()
+        if d.get("maintenance") and not is_admin(user.id):
+            await msg.reply_text("🛠 Bot កំពុងថែទាំ។ សូមមកវិញពេលក្រោយ។")
+            return
+        token = str(abs(hash((query, user.id, time.time_ns()))))[:12]
+        _MEDIA_CACHE[token] = query
+        if len(_MEDIA_CACHE) > 500:
+            _MEDIA_CACHE.pop(next(iter(_MEDIA_CACHE)))
+        await msg.reply_text(
+            "📥 អ្នកចង់ទាញយកពី Link នេះជា Video ឬ MP3?\n"
+            "គាំទ្រគេហទំព័រជាច្រើនតាម yt-dlp ប៉ុន្តែមិនមែនគ្រប់ Link ទាំងអស់ទេ។ សូមប្រើតែមាតិកាដែលអ្នកជាម្ចាស់ ឬមានការអនុញ្ញាត។\n"
+            "សូមជ្រើសរើសមួយខាងក្រោម៖",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🎬 Video (MP4)", callback_data=f"media:video:{token}")],
+                [InlineKeyboardButton("🎵 MP3 (Audio)", callback_data=f"media:audio:{token}")],
+            ]),
+        )
+        return
 
     # broadcast mode
     if is_admin(user.id) and user.id in _broadcast_wait:
@@ -768,9 +977,16 @@ def main() -> None:
     app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CommandHandler("block", cmd_block))
     app.add_handler(CommandHandler("unblock", cmd_unblock))
+    app.add_handler(CallbackQueryHandler(on_home_button, pattern=r"^home:"))
     app.add_handler(CallbackQueryHandler(on_admin_cb, pattern=r"^adm:"))
     app.add_handler(CallbackQueryHandler(on_pick, pattern=r"^pk:"))
     app.add_handler(CallbackQueryHandler(on_download, pattern=r"^dl:"))
+    app.add_handler(CallbackQueryHandler(on_media_choice, pattern=r"^media:"))
+    app.add_handler(MessageHandler(
+        (filters.VIDEO | filters.AUDIO | filters.VOICE | filters.VIDEO_NOTE |
+         filters.PHOTO | filters.Document.ALL | filters.ANIMATION) & ~filters.COMMAND,
+        on_telegram_media,
+    ))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     log.info("SrokMusic started · admins=%s", ADMIN_IDS)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
