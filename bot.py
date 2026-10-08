@@ -42,6 +42,8 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_FILE = DATA_DIR / "db.json"
 _lock = threading.RLock()
 
+JAMENDO_ID = (os.environ.get("JAMENDO_CLIENT_ID") or "").strip()
+JAMENDO_URL = "https://api.jamendo.com/v3.0/tracks/"
 ITUNES_URL = "https://itunes.apple.com/search"
 UA = "SrokMusic/2.0"
 _PREVIEW_CACHE: dict[str, dict[str, str]] = {}
@@ -136,6 +138,36 @@ def itunes_search(term: str, limit: int = 6) -> list[dict[str, Any]]:
     return list(data.get("results") or [])
 
 
+def jamendo_search(term: str, limit: int = 3) -> list[dict[str, Any]]:
+    """បទពេញស្របច្បាប់ (Creative Commons) ពី Jamendo។"""
+    if not JAMENDO_ID:
+        return []
+    q = urllib.parse.urlencode({
+        "client_id": JAMENDO_ID, "format": "json", "limit": limit,
+        "search": term, "audioformat": "mp32", "order": "popularity_total",
+    })
+    req = urllib.request.Request(f"{JAMENDO_URL}?{q}", headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=12) as resp:
+        data = json.loads(resp.read().decode("utf-8", "ignore"))
+    out = []
+    for r in data.get("results") or []:
+        if not r.get("audio"):
+            continue
+        out.append({
+            "trackId": f"jm{r.get('id')}",
+            "trackName": r.get("name"),
+            "artistName": r.get("artist_name"),
+            "collectionName": r.get("album_name"),
+            "trackTimeMillis": int(r.get("duration") or 0) * 1000,
+            "primaryGenreName": "Jamendo",
+            "releaseDate": r.get("releasedate") or "",
+            "fullUrl": r.get("audio"),
+            "trackViewUrl": r.get("shareurl") or "",
+            "artworkUrl100": r.get("image") or "",
+        })
+    return out
+
+
 def youtube_url(title: str, artist: str = "") -> str:
     return "https://www.youtube.com/results?search_query=" + urllib.parse.quote(
         f"{title} {artist}".strip()
@@ -175,7 +207,9 @@ def build_caption(track: dict, idx: int) -> str:
         f"💿 អាល់ប៊ុម៖ {album}" + (f" ({year})" if year else ""),
         f"⏱ រយៈពេល៖ {dur} · 🏷 {genre}",
     ]
-    if track.get("previewUrl"):
+    if track.get("fullUrl"):
+        lines.append("🆓 <b>បទពេញ</b> · Creative Commons (Jamendo)")
+    elif track.get("previewUrl"):
         lines.append("🎧 មាន <b>Preview 30 វិនាទី</b> — ចុចប៊ូតុងទាញ")
     else:
         lines.append("⚠️ បទនេះគ្មាន preview ផ្លូវការ")
@@ -216,10 +250,10 @@ def build_list_text(results: list[dict], query: str) -> str:
     lines = [f"✅ រកឃើញ <b>{len(results)}</b> បទ · <i>{query}</i>\n"]
     for i, t in enumerate(results, 1):
         lines.append(
-            f"<b>{i}.</b> {t.get('trackName') or '—'} — {t.get('artistName') or '—'} "
+            f"<b>{i}.</b> {'🆓 ' if t.get('fullUrl') else ''}{t.get('trackName') or '—'} — {t.get('artistName') or '—'} "
             f"· ⏱ {format_ms(t.get('trackTimeMillis'))}"
         )
-    lines.append("\n👇 ចុចលេខបទដែលចង់បាន")
+    lines.append("\n🆓 = បទពេញ\n👇 ចុចលេខបទដែលចង់បាន")
     return "\n".join(lines)
 
 
@@ -235,7 +269,8 @@ def build_pick_keyboard(results: list[dict]) -> InlineKeyboardMarkup:
 def link_keyboard(track: dict) -> InlineKeyboardMarkup:
     row = []
     if track.get("trackViewUrl"):
-        row.append(InlineKeyboardButton("🍎 Apple Music (បទពេញ)", url=track["trackViewUrl"]))
+        label = "🎼 Jamendo" if track.get("fullUrl") else "🍎 Apple Music (បទពេញ)"
+        row.append(InlineKeyboardButton(label, url=track["trackViewUrl"]))
     row.append(InlineKeyboardButton("▶️ YouTube", url=youtube_url(
         track.get("trackName") or "", track.get("artistName") or "")))
     return InlineKeyboardMarkup([row])
@@ -484,7 +519,12 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     status = await msg.reply_text(f"🔎 កំពុងស្វែងរក៖ <b>{query}</b> …", parse_mode="HTML")
     try:
-        results = itunes_search(query, limit=6)
+        try:
+            full = jamendo_search(query, limit=3)
+        except Exception:
+            log.exception("jamendo")
+            full = []
+        results = full + itunes_search(query, limit=6)
     except Exception as e:
         log.exception("search")
         await status.edit_text(f"❌ ស្វែងរកមិនបាន។ សាកម្តងទៀត។")
@@ -511,7 +551,7 @@ async def send_track(message, track: dict) -> None:
     """ផ្ញើបទដែលបានជ្រើស (cover + audio preview)។"""
     title = re.sub(r'[\\/:*?"<>|]', "", track.get("trackName") or "preview")[:80]
     artist = track.get("artistName") or ""
-    preview = track.get("previewUrl") or ""
+    preview = track.get("fullUrl") or track.get("previewUrl") or ""
     caption = build_caption(track, 1).replace("<b>1. ", "<b>")
     kb = link_keyboard(track)
 
@@ -528,14 +568,15 @@ async def send_track(message, track: dict) -> None:
     if len(data) < 1000:
         await message.reply_text("❌ ឯកសារមិនត្រឹមត្រូវ។")
         return
-    with tempfile.NamedTemporaryFile(suffix=".m4a", delete=False) as tmp:
+    ext = "mp3" if track.get("fullUrl") else "m4a"
+    with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tmp:
         tmp.write(data)
         path = tmp.name
     try:
         with open(path, "rb") as f:
             await message.reply_audio(
                 audio=f,
-                filename=f"{title}.m4a",
+                filename=f"{title}.{ext}",
                 title=title,
                 performer=artist,
                 caption=caption,
