@@ -127,7 +127,7 @@ def is_blocked(uid: int) -> bool:
     return uid in (d.get("blocked") or [])
 
 
-def itunes_search(term: str, limit: int = 6) -> list[dict[str, Any]]:
+def itunes_search(term: str, limit: int = 20) -> list[dict[str, Any]]:
     q = urllib.parse.urlencode({
         "term": term, "media": "music", "entity": "song",
         "limit": limit, "country": "US",
@@ -138,34 +138,75 @@ def itunes_search(term: str, limit: int = 6) -> list[dict[str, Any]]:
     return list(data.get("results") or [])
 
 
-def jamendo_search(term: str, limit: int = 3) -> list[dict[str, Any]]:
-    """បទពេញស្របច្បាប់ (Creative Commons) ពី Jamendo។"""
+def jamendo_search(term: str, limit: int = 25) -> list[dict[str, Any]]:
+    """ស្វែងរកបទពី Jamendo ដោយសាកពាក្យស្វែងរកច្រើនទម្រង់។"""
     if not JAMENDO_ID:
         return []
-    q = urllib.parse.urlencode({
-        "client_id": JAMENDO_ID, "format": "json", "limit": limit,
-        "search": term, "audioformat": "mp32", "order": "popularity_total",
-    })
-    req = urllib.request.Request(f"{JAMENDO_URL}?{q}", headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=12) as resp:
-        data = json.loads(resp.read().decode("utf-8", "ignore"))
-    out = []
-    for r in data.get("results") or []:
-        if not r.get("audio"):
-            continue
-        out.append({
-            "trackId": f"jm{r.get('id')}",
-            "trackName": r.get("name"),
-            "artistName": r.get("artist_name"),
-            "collectionName": r.get("album_name"),
-            "trackTimeMillis": int(r.get("duration") or 0) * 1000,
-            "primaryGenreName": "Jamendo",
-            "releaseDate": r.get("releasedate") or "",
-            "fullUrl": r.get("audio"),
-            "trackViewUrl": r.get("shareurl") or "",
-            "artworkUrl100": r.get("image") or "",
+
+    # Try the original phrase first, then a cleaned/shortened phrase so that
+    # punctuation or extra words do not hide all matching downloadable tracks.
+    cleaned = re.sub(r"[^\\w\\s'-]", " ", term, flags=re.UNICODE)
+    cleaned = re.sub(r"\\s+", " ", cleaned).strip()
+    variants = []
+    for candidate in (term.strip(), cleaned):
+        if candidate and candidate.casefold() not in {x.casefold() for x in variants}:
+            variants.append(candidate)
+    words = cleaned.split()
+    if len(words) >= 3:
+        shorter = " ".join(words[:3])
+        if shorter.casefold() not in {x.casefold() for x in variants}:
+            variants.append(shorter)
+
+    found: dict[str, dict[str, Any]] = {}
+    for candidate in variants:
+        q = urllib.parse.urlencode({
+            "client_id": JAMENDO_ID,
+            "format": "json",
+            "limit": limit,
+            "search": candidate,
+            "audioformat": "mp32",
+            "audiodlformat": "mp32",
+            "order": "popularity_total",
         })
-    return out
+        req = urllib.request.Request(
+            f"{JAMENDO_URL}?{q}", headers={"User-Agent": UA}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                data = json.loads(resp.read().decode("utf-8", "ignore"))
+        except Exception:
+            log.exception("Jamendo query failed: %s", candidate)
+            continue
+
+        for r in data.get("results") or []:
+            track_id = str(r.get("id") or "")
+            if not track_id or not r.get("audio"):
+                continue
+            download_url = r.get("audiodownload") or ""
+            license_url = r.get("license_ccurl") or ""
+            row = {
+                "trackId": f"jm{track_id}",
+                "trackName": r.get("name"),
+                "artistName": r.get("artist_name"),
+                "collectionName": r.get("album_name"),
+                "trackTimeMillis": int(r.get("duration") or 0) * 1000,
+                "primaryGenreName": "Jamendo",
+                "releaseDate": r.get("releasedate") or "",
+                "fullUrl": download_url if download_url and license_url else "",
+                "licenseUrl": license_url,
+                "trackViewUrl": r.get("shareurl") or "",
+                "artworkUrl100": r.get("image") or "",
+            }
+            # Prefer the entry with a verified download URL if the same track
+            # appeared in more than one search variant.
+            previous = found.get(track_id)
+            if previous is None or (row["fullUrl"] and not previous.get("fullUrl")):
+                found[track_id] = row
+
+    # Downloadable tracks first; then other Jamendo listening results.
+    results = list(found.values())
+    results.sort(key=lambda x: (bool(x.get("fullUrl")), x.get("trackName") or ""), reverse=True)
+    return results[: limit * max(1, len(variants))]
 
 
 def youtube_url(title: str, artist: str = "") -> str:
@@ -208,7 +249,7 @@ def build_caption(track: dict, idx: int) -> str:
         f"⏱ រយៈពេល៖ {dur} · 🏷 {genre}",
     ]
     if track.get("fullUrl"):
-        lines.append("🆓 <b>បទពេញ</b> · Creative Commons (Jamendo)")
+        lines.append("🆓 <b>បទពេញ</b> · Jamendo (មាន Download URL និងអាជ្ញាបណ្ណ)")
     elif track.get("previewUrl"):
         lines.append("🎧 មាន <b>Preview 30 វិនាទី</b> — ចុចប៊ូតុងទាញ")
     else:
@@ -229,7 +270,7 @@ def build_keyboard(track: dict) -> InlineKeyboardMarkup:
     row = []
     if apple:
         row.append(InlineKeyboardButton("🍎 Apple Music", url=apple))
-    row.append(InlineKeyboardButton("▶️ YouTube", url=yt))
+    row.append(InlineKeyboardButton("▶️ ស្តាប់លើ YouTube", url=yt))
     rows.append(row)
     return InlineKeyboardMarkup(rows)
 
@@ -271,7 +312,7 @@ def link_keyboard(track: dict) -> InlineKeyboardMarkup:
     if track.get("trackViewUrl"):
         label = "🎼 Jamendo" if track.get("fullUrl") else "🍎 Apple Music (បទពេញ)"
         row.append(InlineKeyboardButton(label, url=track["trackViewUrl"]))
-    row.append(InlineKeyboardButton("▶️ YouTube", url=youtube_url(
+    row.append(InlineKeyboardButton("▶️ ស្តាប់លើ YouTube", url=youtube_url(
         track.get("trackName") or "", track.get("artistName") or "")))
     return InlineKeyboardMarkup([row])
 
@@ -328,7 +369,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "<b>ឧទាហរណ៍</b>\n"
         "• <code>Shape of You</code>\n"
         "• <code>Perfect Ed Sheeran</code>\n\n"
-        "🍎 ស្តាប់បទពេញតាម Apple Music · ▶️ YouTube\n\n"
+        "🆓 បទពេញអាចទាញបានពី Jamendo នៅពេល API ផ្តល់ Download URL និងអាជ្ញាបណ្ណ\n"
+        "🍎 iTunes ផ្តល់ Preview · ▶️ YouTube/Apple Music សម្រាប់ស្តាប់បទពេញតាមផ្លូវការ\n\n"
         "/help — ជំនួយ"
     )
     if user and is_admin(user.id):
@@ -341,7 +383,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "<b>របៀបប្រើ SrokMusic</b>\n"
         "1. វាយឈ្មោះបទ\n"
         "2. ជ្រើសលទ្ធផល\n"
-        "3. ចុច ទាញ Preview ឬ YouTube\n\n"
+        "3. បទពេញអាចផ្ញើជា MP3 ពី Jamendo បើមាន Download URL និងអាជ្ញាបណ្ណ\n"
+        "   iTunes ផ្តល់តែ Preview; YouTube ជាតំណស្តាប់ផ្លូវការ\n"
+        "4. ប្រើប៊ូតុង YouTube/Apple Music ដើម្បីស្តាប់តាមផ្លូវការ\n\n"
         "/start — ម៉ឺនុយ",
         parse_mode="HTML",
     )
@@ -520,11 +564,32 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     status = await msg.reply_text(f"🔎 កំពុងស្វែងរក៖ <b>{query}</b> …", parse_mode="HTML")
     try:
         try:
-            full = jamendo_search(query, limit=3)
+            jamendo_results = jamendo_search(query, limit=25)
         except Exception:
             log.exception("jamendo")
-            full = []
-        results = full + itunes_search(query, limit=6)
+            jamendo_results = []
+        try:
+            itunes_results = itunes_search(query, limit=20)
+        except Exception:
+            log.exception("itunes")
+            itunes_results = []
+
+        # Show legal full-download matches first, then other Jamendo results,
+        # then iTunes previews. Keep the Telegram result list manageable.
+        jamendo_results.sort(key=lambda t: bool(t.get("fullUrl")), reverse=True)
+        combined = jamendo_results + itunes_results
+        seen = set()
+        results = []
+        for track in combined:
+            key = (
+                (track.get("trackName") or "").strip().casefold(),
+                (track.get("artistName") or "").strip().casefold(),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append(track)
+        results = results[:20]
     except Exception as e:
         log.exception("search")
         await status.edit_text(f"❌ ស្វែងរកមិនបាន។ សាកម្តងទៀត។")
